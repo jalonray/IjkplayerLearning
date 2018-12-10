@@ -1,6 +1,6 @@
-#ijkPlayer Android 源码研究
+# ijkPlayer Android 源码研究
 
-##初始化
+## 初始化
 
 当前目录：android/ijkplayer/ijkplayer-armv7a/src/main/jni/
 
@@ -156,7 +156,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved)
 }
 ```
 
-###第一句```g_jvm = vm;```
+### 第一句```g_jvm = vm;```
 
 ```g_jvm = vm;``` 定义在：
 ijkmedia/ijksdl/android/ijksdl\_android\_jni.c
@@ -168,13 +168,13 @@ static pthread_key_t g_thread_key;
 static pthread_once_t g_key_once = PTHREAD_ONCE_INIT;
 ```
 
-###第二句```pthread_mutex_init(&g_clazz.mutex, NULL);```
+### 第二句```pthread_mutex_init(&g_clazz.mutex, NULL);```
 
 ```pthread_mutex_init(&g_clazz.mutex, NULL);``` 是定义在 ffmpeg 中的，ffmpeg 在 ijkplayer 根目录的 extra/ 里。该函数定义在 ffmpeg/compat/os2threads.h 或是 ffmpeg/compat/w32pthreads.h 中，用于适配不同的底层。然后封装在 ffmpeg/libavutil/thread.h 里统一调用。
 
 [Thread.h 详情](ffmpeg_libavutil_thread.md)
 
-###第三句```IJK_FIND_JAVA_CLASS(env, g_clazz.clazz, JNI_CLASS_IJKPLAYER);```
+### 第三句```IJK_FIND_JAVA_CLASS(env, g_clazz.clazz, JNI_CLASS_IJKPLAYER);```
 
 ```IJK_FIND_JAVA_CLASS(env, g_clazz.clazz, JNI_CLASS_IJKPLAYER);``` 定义在：
 ijkmedia/ijksdl/android/ijksdl\_android\_jni.h
@@ -198,7 +198,7 @@ ijkmedia/ijksdl/android/ijksdl\_android\_jni.h
 ```
 通过 classsign__ 和 env__ 得到 jvm 中 class 的实例引用，并以 GlobalRef 的方式赋予 var__。对于 GlobalRef 和 LocalRef 的详细讲解，可参考 [Google 文档](https://developer.android.com/training/articles/perf-jni#local-and-global-references) 和 [java 文档](https://docs.oracle.com/javase/7/docs/technotes/guides/jni/spec/design.html#wp1242)
 
-###第四句```ijkmp_global_init();```
+### 第四句```ijkmp_global_init();```
 
 ```ijkmp_global_init();``` 实现在：ijkmedia/ijkplayer/ijkplayer.c 中
 
@@ -212,7 +212,40 @@ void ijkmp_global_init()
 ```ffp_global_init();``` 实现在：ijkmedia/ijkplayer/ff\_ffplay.c 中
 
 ```
+static AVPacket flush_pkt;
 static bool g_ffmpeg_global_inited = false;
+
+// lock manager 的回调
+static int lockmgr(void **mtx, enum AVLockOp op)
+{
+    switch (op) {
+    case AV_LOCK_CREATE:
+        *mtx = SDL_CreateMutex();
+        if (!*mtx) {
+            av_log(NULL, AV_LOG_FATAL, "SDL_CreateMutex(): %s\n", SDL_GetError());
+            return 1;
+        }
+        return 0;
+    case AV_LOCK_OBTAIN:
+        return !!SDL_LockMutex(*mtx);
+    case AV_LOCK_RELEASE:
+        return !!SDL_UnlockMutex(*mtx);
+    case AV_LOCK_DESTROY:
+        SDL_DestroyMutex(*mtx);
+        return 0;
+    }
+    return 1;
+}
+
+// av_log_set_call_back 的回调
+static void ffp_log_callback_brief(void *ptr, int level, const char *fmt, va_list vl)
+{
+    if (level > av_log_get_level())
+        return;
+
+    int ffplv __unused = log_level_av_to_ijk(level);
+    VLOG(ffplv, IJK_LOG_TAG, fmt, vl);
+}
 
 void ffp_global_init()
 {
@@ -267,14 +300,26 @@ void ffp_global_init()
 
 可见是通过配制文件生成的。
 
-之后是```avdevice_register_all()```，注册所有的硬件方法，[方法详解](libavdevice_avdevice.md)
+之后是```avdevice_register_all()```，注册所有的硬件方法，[方法详解](libavdevice_avdevice.md)。
 
-```avfilter_register_all();```，注册所有的 filter 方法，[方法详解](libavfilter_avfilter.md)
+```avfilter_register_all();```，注册所有的 filter 方法，[方法详解](libavfilter_avfilter.md)。
 
-```av_register_all();```，初始化 libavformat 并注册所有的 muxers，demuxers，和 protocols，[方法详解](av_register_all.md)
+```av_register_all();```，初始化 libavformat 并注册所有的 muxers，demuxers，和 protocols，[方法详解](av_register_all.md)。
 
-```ijkav_register_all();```，
+```ijkav_register_all();```，注册所有 ijkplayer 自定的一些协议，[方法详解](ijkav_register_all.md)。
 
-```avformat_network_init();```
+```avformat_network_init();```，初始化网络的内容，[方法详解](avformat_network_init.md)。
+
+```av_lockmgr_register(lockmgr);```，注册一个用户提供的锁 lock manager，[方法详解](av_lockmgr_register.md)。
+
+```av_log_set_callback(ffp_log_callback_brief);```，设置 logging 的回调，[方法详解](av_log_set_callback.md)。
+
+```av_init_packet(&flush_pkt);```，初始化一个 packet，[方法详解](av_init_packet.md)。
+
+```flush_pkt.data = (uint8_t *)&flush_pkt;```，截 flush_pkt 的前 8 位作 data。
+
+```g_ffmpeg_global_inited = true;```，标记初始化完成。
+
+### 第五句 ```ijkmp_global_set_inject_callback(inject_callback);```
 
 
