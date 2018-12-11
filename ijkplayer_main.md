@@ -322,4 +322,190 @@ void ffp_global_init()
 
 ### 第五句 ```ijkmp_global_set_inject_callback(inject_callback);```
 
+将之赋予类型为 FFPlayer 的 app_ctx->func_on_app_event 上，在对应 app_event 发生变化时便可及时获取回调。
+
+[方法详解](ijkmp_global_set_inject_callback.md)
+
+回调的实现在 ijkplayer_ini.c 中：
+
+```
+// NOTE: support to be called from read_thread
+static int
+inject_callback(void *opaque, int what, void *data, size_t data_size)
+{
+    JNIEnv     *env     = NULL;
+    jobject     jbundle = NULL;
+    int         ret     = -1;
+    SDL_JNI_SetupThreadEnv(&env);
+
+    jobject weak_thiz = (jobject) opaque;
+    if (weak_thiz == NULL )
+        goto fail;
+    switch (what) {
+        case AVAPP_CTRL_WILL_HTTP_OPEN:
+        case AVAPP_CTRL_WILL_LIVE_OPEN:
+        case AVAPP_CTRL_WILL_CONCAT_SEGMENT_OPEN: {
+            AVAppIOControl *real_data = (AVAppIOControl *)data;
+            real_data->is_handled = 0;
+
+            jbundle = J4AC_Bundle__Bundle__catchAll(env);
+            if (!jbundle) {
+                ALOGE("%s: J4AC_Bundle__Bundle__catchAll failed for case %d\n", __func__, what);
+                goto fail;
+            }
+            J4AC_Bundle__putString__withCString__catchAll(env, jbundle, "url", real_data->url);
+            J4AC_Bundle__putInt__withCString__catchAll(env, jbundle, "segment_index", real_data->segment_index);
+            J4AC_Bundle__putInt__withCString__catchAll(env, jbundle, "retry_counter", real_data->retry_counter);
+            real_data->is_handled = J4AC_IjkMediaPlayer__onNativeInvoke(env, weak_thiz, what, jbundle);
+            if (J4A_ExceptionCheck__catchAll(env)) {
+                goto fail;
+            }
+
+            J4AC_Bundle__getString__withCString__asCBuffer(env, jbundle, "url", real_data->url, sizeof(real_data->url));
+            if (J4A_ExceptionCheck__catchAll(env)) {
+                goto fail;
+            }
+            ret = 0;
+            break;
+        }
+        case AVAPP_EVENT_WILL_HTTP_OPEN:
+        case AVAPP_EVENT_DID_HTTP_OPEN:
+        case AVAPP_EVENT_WILL_HTTP_SEEK:
+        case AVAPP_EVENT_DID_HTTP_SEEK: {
+            AVAppHttpEvent *real_data = (AVAppHttpEvent *) data;
+            jbundle = J4AC_Bundle__Bundle__catchAll(env);
+            if (!jbundle) {
+                ALOGE("%s: J4AC_Bundle__Bundle__catchAll failed for case %d\n", __func__, what);
+                goto fail;
+            }
+            J4AC_Bundle__putString__withCString__catchAll(env, jbundle, "url", real_data->url);
+            J4AC_Bundle__putLong__withCString__catchAll(env, jbundle, "offset", real_data->offset);
+            J4AC_Bundle__putInt__withCString__catchAll(env, jbundle, "error", real_data->error);
+            J4AC_Bundle__putInt__withCString__catchAll(env, jbundle, "http_code", real_data->http_code);
+            J4AC_Bundle__putLong__withCString__catchAll(env, jbundle, "file_size", real_data->filesize);
+            J4AC_IjkMediaPlayer__onNativeInvoke(env, weak_thiz, what, jbundle);
+            if (J4A_ExceptionCheck__catchAll(env))
+                goto fail;
+            ret = 0;
+            break;
+        }
+        case AVAPP_CTRL_DID_TCP_OPEN:
+        case AVAPP_CTRL_WILL_TCP_OPEN: {
+            AVAppTcpIOControl *real_data = (AVAppTcpIOControl *)data;
+            jbundle = J4AC_Bundle__Bundle__catchAll(env);
+            if (!jbundle) {
+                ALOGE("%s: J4AC_Bundle__Bundle__catchAll failed for case %d\n", __func__, what);
+                goto fail;
+            }
+            J4AC_Bundle__putInt__withCString__catchAll(env, jbundle, "error", real_data->error);
+            J4AC_Bundle__putInt__withCString__catchAll(env, jbundle, "family", real_data->family);
+            J4AC_Bundle__putString__withCString__catchAll(env, jbundle, "ip", real_data->ip);
+            J4AC_Bundle__putInt__withCString__catchAll(env, jbundle, "port", real_data->port);
+            J4AC_Bundle__putInt__withCString__catchAll(env, jbundle, "fd", real_data->fd);
+            J4AC_IjkMediaPlayer__onNativeInvoke(env, weak_thiz, what, jbundle);
+            if (J4A_ExceptionCheck__catchAll(env))
+                goto fail;
+            ret = 0;
+            break;
+        }
+        default: {
+            ret = 0;
+        }
+    }
+fail:
+    SDL_JNI_DeleteLocalRefP(env, &jbundle);
+    return ret;
+}
+```
+
+### 第六句 ```FFmpegApi_global_init(env);```
+
+该方法声明在 ijkmedia/ijkplayer/android/ffmpeg_api_jni.h 中：
+
+```
+int FFmpegApi_global_init(JNIEnv *env);
+```
+
+实现在 ijkmedia/ijkplayer/android/ffmpeg_api_jni.c 中：
+
+```
+#define JNI_CLASS_FFMPEG_API "tv/danmaku/ijk/media/player/ffmpeg/FFmpegApi"
+
+int FFmpegApi_global_init(JNIEnv *env)
+{
+    int ret = 0;
+
+    IJK_FIND_JAVA_CLASS(env, g_clazz.clazz, JNI_CLASS_FFMPEG_API);
+    (*env)->RegisterNatives(env, g_clazz.clazz, g_methods, NELEM(g_methods));
+
+    return ret;
+}
+```
+
+将 FFmpegApi 的 JAVA 类加载到 JVM 当中。
+
+### 第七句 ```return JNI_VERSION_1_4;```
+
+返回 JNI_VERSION_1_4。
+
+
+
+## 播放
+
+### setDataSource
+
+通过 ijkmedia/ijkplayer/android/ijkplayer_jni.c 的 g_method 表，可以看到 setDataSource 对应几个 native 方法。
+
+```
+static JNINativeMethod g_methods[] = {
+    {
+        "_setDataSource",
+        "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V",
+        (void *) IjkMediaPlayer_setDataSourceAndHeaders
+    },
+    { "_setDataSourceFd",       "(I)V",     (void *) IjkMediaPlayer_setDataSourceFd },
+    { "_setDataSource",         "(Ltv/danmaku/ijk/media/player/misc/IMediaDataSource;)V", (void *)IjkMediaPlayer_setDataSourceCallback },
+    ...
+}
+```
+
+先看第三个方法，```IjkMediaPlayer_setDataSourceCallback```，因为在 Example 中，封装的 setDataSource，包含 url 和 path，最后指向的都是这个方法。
+
+```IjkMediaPlayer_setDataSourceCallback``` 实现在 ijkmedia/ijkplayer/android/ijkplayer_jni.c :
+
+```
+static void
+IjkMediaPlayer_setDataSourceCallback(JNIEnv *env, jobject thiz, jobject callback)
+{
+    MPTRACE("%s\n", __func__);
+    int retval = 0;
+    char uri[128];
+    int64_t nativeMediaDataSource = 0;
+    IjkMediaPlayer *mp = jni_get_media_player(env, thiz);
+    JNI_CHECK_GOTO(callback, env, "java/lang/IllegalArgumentException", "mpjni: setDataSourceCallback: null fd", LABEL_RETURN);
+    JNI_CHECK_GOTO(mp, env, "java/lang/IllegalStateException", "mpjni: setDataSourceCallback: null mp", LABEL_RETURN);
+
+    nativeMediaDataSource = jni_set_media_data_source(env, thiz, callback);
+    JNI_CHECK_GOTO(nativeMediaDataSource, env, "java/lang/IllegalStateException", "mpjni: jni_set_media_data_source: NewGlobalRef", LABEL_RETURN);
+
+    ALOGV("setDataSourceCallback: %"PRId64"\n", nativeMediaDataSource);
+    snprintf(uri, sizeof(uri), "ijkmediadatasource:%"PRId64, nativeMediaDataSource);
+
+    retval = ijkmp_set_data_source(mp, uri);
+
+    IJK_CHECK_MPRET_GOTO(retval, env, LABEL_RETURN);
+
+LABEL_RETURN:
+    ijkmp_dec_ref_p(&mp);
+}
+```
+
+依然逐步分析：
+
+```IjkMediaPlayer *mp = jni_get_media_player(env, thiz);```，获得 IjkMediaPlayer 的引用，[方法详解](jni_get_media_player.md)。
+
+```JNI_CHECK_GOTO(condition__, env__, exception__, msg__, label__)```，判空检查，若为空，则抛出异常，跳转到 label__ 处，[方法详解](JNI_CHECK_GOTO.md)。
+
+```nativeMediaDataSource = jni_set_media_data_source(env, thiz, callback);```
+
 
