@@ -506,6 +506,10 @@ LABEL_RETURN:
 
 ```JNI_CHECK_GOTO(condition__, env__, exception__, msg__, label__)```，判空检查，若为空，则抛出异常，跳转到 label__ 处，[方法详解](JNI_CHECK_GOTO.md)。
 
-```nativeMediaDataSource = jni_set_media_data_source(env, thiz, callback);```
+```nativeMediaDataSource = jni_set_media_data_source(env, thiz, callback);```，设置视频的 MediaDataSource。[方法详解](jni_set_media_data_source.md)。
+
+```retval = ijkmp_set_data_source(mp, uri);```，[方法详解](ijkmp_set_data_source.md)。
+
+
 
 
