@@ -1,0 +1,90 @@
+# ijkmp\_dec\_ref\_p
+
+方法声明在 ijkmedia/ijkplayer/ijkplayer.h 中：
+
+```
+void ijkmp_dec_ref_p(IjkMediaPlayer **pmp);
+```
+
+实现在 ijkmedia/ijkplayer/ijkplayer.h 中：
+
+```
+void ijkmp_dec_ref_p(IjkMediaPlayer **pmp)
+{
+    if (!pmp)
+        return;
+
+    ijkmp_dec_ref(*pmp);
+    *pmp = NULL;
+}
+
+void ijkmp_dec_ref(IjkMediaPlayer *mp)
+{
+    if (!mp)
+        return;
+
+    int ref_count = __sync_sub_and_fetch(&mp->ref_count, 1);
+    if (ref_count == 0) {
+        MPTRACE("ijkmp_dec_ref(): ref=0\n");
+        ijkmp_shutdown(mp);
+        ijkmp_destroy_p(&mp);
+    }
+}
+
+void ijkmp_shutdown(IjkMediaPlayer *mp)
+{
+    return ijkmp_shutdown_l(mp);
+}
+
+void ijkmp_shutdown_l(IjkMediaPlayer *mp)
+{
+    assert(mp);
+
+    MPTRACE("ijkmp_shutdown_l()\n");
+    if (mp->ffplayer) {
+        ffp_stop_l(mp->ffplayer);
+        ffp_wait_stop_l(mp->ffplayer);
+    }
+    MPTRACE("ijkmp_shutdown_l()=void\n");
+}
+
+inline static void ijkmp_destroy_p(IjkMediaPlayer **pmp)
+{
+    if (!pmp)
+        return;
+
+    ijkmp_destroy(*pmp);
+    *pmp = NULL;
+}
+
+inline static void ijkmp_destroy(IjkMediaPlayer *mp)
+{
+    if (!mp)
+        return;
+
+    ffp_destroy_p(&mp->ffplayer);
+    if (mp->msg_thread) {
+        SDL_WaitThread(mp->msg_thread, NULL);
+        mp->msg_thread = NULL;
+    }
+
+    pthread_mutex_destroy(&mp->mutex);
+
+    freep((void**)&mp->data_source);
+    memset(mp, 0, sizeof(IjkMediaPlayer));
+    freep((void**)&mp);
+}
+```
+
+用于释放对 pmp 的引用。之后再看几个 ffp_* 的方法。
+
+```ffp_stop_l(mp->ffplayer);``` 方法声明在 ijkmedia/ijkplayer/ff_ffplay.h 中：
+
+```
+/* playback controll */
+int ffp_stop_l(FFPlayer *ffp);
+```
+
+通过定义知，是让 FFPlayer 停止播放的播放控制方法。[方法详解](ffp_stop_l.md)
+
+[返回](ijkplayer_main.md)

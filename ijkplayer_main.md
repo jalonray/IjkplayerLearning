@@ -449,6 +449,51 @@ int FFmpegApi_global_init(JNIEnv *env)
 返回 JNI_VERSION_1_4。
 
 
+## IjkMediaPlayer 数据结构
+
+声明在 ijkmedia/ijkplayer/ijkplayer.h 中：
+
+```
+typedef struct IjkMediaPlayer IjkMediaPlayer;
+```
+
+实现在 ijkmedia/ijkplayer/ijkplayer_internal.h 中：
+
+```
+#ifndef IJKPLAYER_ANDROID__IJKPLAYER_INTERNAL_H
+#define IJKPLAYER_ANDROID__IJKPLAYER_INTERNAL_H
+
+#include <assert.h>
+#include "ijksdl/ijksdl.h"
+#include "ff_fferror.h"
+#include "ff_ffplay.h"
+#include "ijkplayer.h"
+
+struct IjkMediaPlayer {
+    volatile int ref_count;
+    pthread_mutex_t mutex;
+    FFPlayer *ffplayer;
+
+    int (*msg_loop)(void*);
+    SDL_Thread *msg_thread;
+    SDL_Thread _msg_thread;
+
+    int mp_state;
+    char *data_source;
+    void *weak_thiz;
+
+    int restart;
+    int restart_from_beginning;
+    int seek_req;
+    long seek_msec; 
+};
+
+#endif
+```
+
+
+## 状态机
+
 
 ## 播放
 
@@ -510,6 +555,7 @@ LABEL_RETURN:
 
 ```retval = ijkmp_set_data_source(mp, uri);```，[方法详解](ijkmp_set_data_source.md)。
 
+```IJK_CHECK_MPRET_GOTO(retval, env, LABEL_RETURN);``` 检查返回值，判断 set_data_source  是否成功。
 
-
+```ijkmp_dec_ref_p(&mp);``` 对应释放对 mp 的引用。[方法详解](ijkmp_dec_ref_p.md)。
 

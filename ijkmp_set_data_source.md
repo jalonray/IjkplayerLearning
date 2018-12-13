@@ -22,6 +22,18 @@ int ijkmp_set_data_source(IjkMediaPlayer *mp, const char *url);
 
 #define MPST_RET_IF_EQ(real, expected) \
      MPST_RET_IF_EQ_INT(real, expected, EIJK_INVALID_STATE)
+     
+int ijkmp_set_data_source(IjkMediaPlayer *mp, const char *url)
+{
+    assert(mp);
+    assert(url);
+    MPTRACE("ijkmp_set_data_source(url=\"%s\")\n", url);
+    pthread_mutex_lock(&mp->mutex);
+    int retval = ijkmp_set_data_source_l(mp, url);
+    pthread_mutex_unlock(&mp->mutex);
+    MPTRACE("ijkmp_set_data_source(url=\"%s\")=%d\n", url, retval);
+    return retval;
+}
 
 static int ijkmp_set_data_source_l(IjkMediaPlayer *mp, const char *url)
 {
@@ -48,17 +60,14 @@ static int ijkmp_set_data_source_l(IjkMediaPlayer *mp, const char *url)
     return 0;
 }
 
-int ijkmp_set_data_source(IjkMediaPlayer *mp, const char *url)
+void ijkmp_change_state_l(IjkMediaPlayer *mp, int new_state)
 {
-    assert(mp);
-    assert(url);
-    MPTRACE("ijkmp_set_data_source(url=\"%s\")\n", url);
-    pthread_mutex_lock(&mp->mutex);
-    int retval = ijkmp_set_data_source_l(mp, url);
-    pthread_mutex_unlock(&mp->mutex);
-    MPTRACE("ijkmp_set_data_source(url=\"%s\")=%d\n", url, retval);
-    return retval;
+    mp->mp_state = new_state;
+    ffp_notify_msg1(mp->ffplayer, FFP_MSG_PLAYBACK_STATE_CHANGED);
 }
+
 ```
+
+分析一下，先 ```pthread_mutex_lock(&mp->mutex);``` 上锁，再 ```int retval = ijkmp_set_data_source_l(mp, url);``` 设置 dataSource，可以看到里面的实现是对当前的 mp_state  作状态判别，在设置 dataSource 时，Ijkplayer 的 mp_state 应当是 MP_STATE_IDLE。之后清空原有的 data_source 内存，再将传入的 url 拷贝至 data_source。接着是溢出判断。最后发送状态更新至 MP_STATE_INITIALIZED 的通知。下面 ```pthread_mutex_unlock(&mp->mutex);``` 释放锁，最后 ```return retval;``` 返回操作结果，若成功则为 0，状态错误是 ```EIJK_INVALID_STATE```，溢出是 ```EIJK_OUT_OF_MEMORY```。
 
 [返回](ijkplayer_main.md)
