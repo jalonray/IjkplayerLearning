@@ -135,6 +135,8 @@ static void set_clock(Clock *c, double pts, int serial)
 }
 ```
 
+```av_gettime_relative()``` 获取相对时间，[方法详解](av_gettime_relative.md)。
+
 看下 Clock 的声明：
 
 ```
@@ -149,5 +151,53 @@ typedef struct Clock {
 } Clock;
 ```
 
+是一个同步时钟。不过在我们现在讨论的 pause 方法中并不会走到这里，接着讨论后面：
+
+```is->pause_req = pause_on;``` 设置 pause_req 为 pause 值，这里为 true，这是一个“请求暂停”的 flag。```ffp->auto_resume = !pause_on;``` 设置 auto_resume 为 pause 的反值，这里是 false，```stream_update_pause_l(ffp);``` 更新 stream 的状态为 pause。
+
+```
+static void stream_update_pause_l(FFPlayer *ffp)
+{
+    VideoState *is = ffp->is;
+    if (!is->step && (is->pause_req || is->buffering_on)) {
+        stream_toggle_pause_l(ffp, 1);
+    } else {
+        stream_toggle_pause_l(ffp, 0);
+    }
+}
+```
+
+```if (!is->step && (is->pause_req || is->buffering_on))``` step 为 false 并 请求了 pause 或是正在 buffer 时，```stream_toggle_pause_l(ffp, 1);``` 设 stream 的暂停为 true，否则 ```stream_toggle_pause_l(ffp, 0);``` 设 stream 的暂停为 false，也就是 resume。
+
+实现如下：
+
+```
+/* pause or resume the video */
+static void stream_toggle_pause_l(FFPlayer *ffp, int pause_on)
+{
+    VideoState *is = ffp->is;
+    if (is->paused && !pause_on) {
+        is->frame_timer += av_gettime_relative() / 1000000.0 - is->vidclk.last_updated;
+
+#ifdef FFP_MERGE
+        if (is->read_pause_return != AVERROR(ENOSYS)) {
+            is->vidclk.paused = 0;
+        }
+#endif
+        set_clock(&is->vidclk, get_clock(&is->vidclk), is->vidclk.serial);
+        set_clock(&is->audclk, get_clock(&is->audclk), is->audclk.serial);
+    } else {
+    }
+    set_clock(&is->extclk, get_clock(&is->extclk), is->extclk.serial);
+    if (is->step && (is->pause_req || is->buffering_on)) {
+        is->paused = is->vidclk.paused = is->extclk.paused = pause_on;
+    } else {
+        is->paused = is->audclk.paused = is->vidclk.paused = is->extclk.paused = pause_on;
+        SDL_AoutPauseAudio(ffp->aout, pause_on);
+    }
+}
+```
+
+```if (is->paused && !pause_on) {``` 若已经暂停了；```is->frame_timer += av_gettime_relative() / 1000000.0 - is->vidclk.last_updated;``` 设一帧 frame_timer 的时间为现在至上次更新的时间；```if (is->read_pause_return != AVERROR(ENOSYS)) {``` 若有错误，```is->vidclk.paused = 0;``` pause 置为 false；```set_clock(&is->vidclk, get_clock(&is->vidclk), is->vidclk.serial);``` 和 ```set_clock(&is->audclk, get_clock(&is->audclk), is->audclk.serial);``` 对对应的 serial 更新 video 和 audio clock；到这对应 ```if (is->paused && !pause_on) {``` 的部分，下面是通用逻辑，```set_clock(&is->extclk, get_clock(&is->extclk), is->extclk.serial);``` 更新绝对 clock 对应 serial 的 clock；```if (is->step && (is->pause_req || is->buffering_on)) {``` 若 step 为 true，并请求了 pause 或是正在 buffer，则 ```is->paused = is->vidclk.paused = is->extclk.paused = pause_on;``` 所有的 clock 设置为 pause；否则在设置所有的 clock 设置为 pause 之后，```SDL_AoutPauseAudio(ffp->aout, pause_on);``` 暂停 Audio，[方法详情](SDL_AoutPauseAudio.md)。
 
 [返回](ijkmp_dec_ref_p.md)

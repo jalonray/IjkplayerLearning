@@ -87,4 +87,6 @@ int ffp_stop_l(FFPlayer *ffp);
 
 通过定义知，是让 FFPlayer 停止播放的播放控制方法。[方法详解](ffp_stop_l.md)
 
+之后
+
 [返回](ijkplayer_main.md)
