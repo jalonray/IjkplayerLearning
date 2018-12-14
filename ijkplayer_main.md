@@ -1,6 +1,6 @@
 # ijkPlayer Android 源码研究
 
-## 初始化
+## 加载 ijkplayer.so 初始化
 
 当前目录：android/ijkplayer/ijkplayer-armv7a/src/main/jni/
 
@@ -494,6 +494,56 @@ struct IjkMediaPlayer {
 
 ## 状态机
 
+
+## native 初始化
+
+通过 g_method，可以找到 ```"native_init", "()V", (void *) IjkMediaPlayer_native_init```，这是在 example 中 IjkMediaPlayer.java 的构造方法中调用的。
+
+native 方法实现在 ijkmedia/ijkplayer/android/ijkplayer_jni.c 中：
+
+```
+static void
+IjkMediaPlayer_native_init(JNIEnv *env)
+{
+    MPTRACE("%s\n", __func__);
+}
+```
+
+仅仅是一个日志。
+
+
+## 初始化设置
+
+通过 g_method，可以找到 ```"native_setup", "(Ljava/lang/Object;)V", (void *) IjkMediaPlayer_native_setup```，这是在 example 中 IjkMediaPlayer.java 的构造方法中调用的。
+
+native 方法实现在 ijkmedia/ijkplayer/android/ijkplayer_jni.c 中：
+
+```
+static void IjkMediaPlayer_native_setup(JNIEnv *env, jobject thiz, jobject weak_this);
+
+static void
+IjkMediaPlayer_native_setup(JNIEnv *env, jobject thiz, jobject weak_this)
+{
+    MPTRACE("%s\n", __func__);
+    IjkMediaPlayer *mp = ijkmp_android_create(message_loop);
+    JNI_CHECK_GOTO(mp, env, "java/lang/OutOfMemoryError", "mpjni: native_setup: ijkmp_create() failed", LABEL_RETURN);
+
+    jni_set_media_player(env, thiz, mp);
+    ijkmp_set_weak_thiz(mp, (*env)->NewGlobalRef(env, weak_this));
+    ijkmp_set_inject_opaque(mp, ijkmp_get_weak_thiz(mp));
+    ijkmp_set_ijkio_inject_opaque(mp, ijkmp_get_weak_thiz(mp));
+    ijkmp_android_set_mediacodec_select_callback(mp, mediacodec_select_callback, ijkmp_get_weak_thiz(mp));
+
+LABEL_RETURN:
+    ijkmp_dec_ref_p(&mp);
+}
+```
+
+逐步分析：
+
+```IjkMediaPlayer *mp = ijkmp_android_create(message_loop);``` 创建一个 IjkMediaPlayer 的 Android 下的实例。[方法详情](ijkmp_android_create.md)
+
+```jni_set_media_player(env, thiz, mp);``` 存储 mp 的引用。
 
 ## 播放
 

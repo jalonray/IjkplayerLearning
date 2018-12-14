@@ -82,11 +82,19 @@ inline static void ijkmp_destroy(IjkMediaPlayer *mp)
 
 ```
 /* playback controll */
+int ffp_prepare_async_l(FFPlayer *ffp, const char *file_name);
+int fp_start_from_l(FFPlayer *ffp, long msec);
+int ffp_start_l(FFPlayer *ffp);
+int ffp_pause_l(FFPlayer *ffp);
+int ffp_is_paused_l(FFPlayer *ffp);
 int ffp_stop_l(FFPlayer *ffp);
+int ffp_wait_stop_l(FFPlayer *ffp);
 ```
 
 通过定义知，是让 FFPlayer 停止播放的播放控制方法。[方法详解](ffp_stop_l.md)
 
-之后
+同样的 ```ffp_wait_stop_l(mp->ffplayer);``` 是等待 FFPlayer 停止播放的控制方法。[方法详解](ffp_wait_stop_l.md)
+
+之后 ```ijkmp_destroy_p(&mp);``` 销毁 mp 的内存。[方法详解](ijkmp_destroy_p.md)
 
 [返回](ijkplayer_main.md)
