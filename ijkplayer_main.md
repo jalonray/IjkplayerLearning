@@ -541,9 +541,58 @@ LABEL_RETURN:
 
 逐步分析：
 
-```IjkMediaPlayer *mp = ijkmp_android_create(message_loop);``` 创建一个 IjkMediaPlayer 的 Android 下的实例。[方法详情](ijkmp_android_create.md)
+```IjkMediaPlayer *mp = ijkmp_android_create(message_loop);``` 创建一个 IjkMediaPlayer 的 Android 下的实例。[方法详解](ijkmp_android_create.md)
 
-```jni_set_media_player(env, thiz, mp);``` 存储 mp 的引用。
+```
+JNI_CHECK_GOTO(mp, env, "java/lang/OutOfMemoryError", "mpjni: native_setup: ijkmp_create() failed", LABEL_RETURN);
+```
+
+判空。
+
+```jni_set_media_player(env, thiz, mp);``` 存储 mp 的引用。[方法详解](jni_set_media_player.md)
+
+```ijkmp_set_weak_thiz(mp, (*env)->NewGlobalRef(env, weak_this));``` 让 IjkMediaPlayer 得到 this 的引用。[方法详解](ijkmp_set_weak_thiz.md)
+
+```ijkmp_set_inject_opaque(mp, ijkmp_get_weak_thiz(mp));``` 注入 opaque。[方法详解](ijkmp_set_inject_opaque.md)
+
+```ijkmp_set_ijkio_inject_opaque(mp, ijkmp_get_weak_thiz(mp));``` 注入 ijkio 的 opaque。[方法详解](ijkmp_set_ijkio_inject_opaque.md)
+
+```
+ijkmp_android_set_mediacodec_select_callback(mp, 
+        mediacodec_select_callback, ijkmp_get_weak_thiz(mp));
+```
+
+设置 media codec 选择之后的回调。[方法详解](ijkmp_android_set_mediacodec_select_callback.md)
+
+```ijkmp_dec_ref_p(&mp);``` 最后释放 mp 的引用。
+
+```mediacodec_select_callback``` 的实现是：
+
+```
+static bool mediacodec_select_callback(void *opaque, ijkmp_mediacodecinfo_context *mcc)
+{
+    JNIEnv *env = NULL;
+    jobject weak_this = (jobject) opaque;
+    const char *found_codec_name = NULL;
+
+    if (JNI_OK != SDL_JNI_SetupThreadEnv(&env)) {
+        ALOGE("%s: SetupThreadEnv failed\n", __func__);
+        return -1;
+    }
+
+    found_codec_name = J4AC_IjkMediaPlayer__onSelectCodec__withCString__asCBuffer(env, weak_this, mcc->mime_type, mcc->profile, mcc->level, mcc->codec_name, sizeof(mcc->codec_name));
+    if (J4A_ExceptionCheck__catchAll(env) || !found_codec_name) {
+        ALOGE("%s: onSelectCodec failed\n", __func__);
+        goto fail;
+    }
+
+fail:
+    return found_codec_name;
+}
+```
+
+会在回调中返回 codec 的名称。
+
 
 ## 播放
 
