@@ -492,7 +492,409 @@ struct IjkMediaPlayer {
 ```
 
 
-## 状态机
+## message_loop
+
+于 ijkmedia/ijkplayer/android/ijkplayer_jni.c 中：
+
+```
+static int message_loop(void *arg);
+
+static int message_loop(void *arg)
+{
+    MPTRACE("%s\n", __func__);
+
+    JNIEnv *env = NULL;
+    if (JNI_OK != SDL_JNI_SetupThreadEnv(&env)) {
+        ALOGE("%s: SetupThreadEnv failed\n", __func__);
+        return -1;
+    }
+
+    IjkMediaPlayer *mp = (IjkMediaPlayer*) arg;
+    JNI_CHECK_GOTO(mp, env, NULL, "mpjni: native_message_loop: null mp", LABEL_RETURN);
+
+    message_loop_n(env, mp);
+
+LABEL_RETURN:
+    ijkmp_dec_ref_p(&mp);
+
+    MPTRACE("message_loop exit");
+    return 0;
+}
+```
+
+前面是一些初始化和空判断，后面是引用的释放。中间 ```message_loop_n(env, mp);``` 是重点函数。
+
+```
+static void message_loop_n(JNIEnv *env, IjkMediaPlayer *mp)
+{
+    jobject weak_thiz = (jobject) ijkmp_get_weak_thiz(mp);
+    JNI_CHECK_GOTO(weak_thiz, env, NULL, "mpjni: message_loop_n: null weak_thiz", LABEL_RETURN);
+
+    while (1) {
+        AVMessage msg;
+
+        int retval = ijkmp_get_msg(mp, &msg, 1);
+        if (retval < 0)
+            break;
+
+        // block-get should never return 0
+        assert(retval > 0);
+
+        switch (msg.what) {
+        case FFP_MSG_FLUSH:
+            MPTRACE("FFP_MSG_FLUSH:\n");
+            post_event(env, weak_thiz, MEDIA_NOP, 0, 0);
+            break;
+        case FFP_MSG_ERROR:
+            MPTRACE("FFP_MSG_ERROR: %d\n", msg.arg1);
+            post_event(env, weak_thiz, MEDIA_ERROR, MEDIA_ERROR_IJK_PLAYER, msg.arg1);
+            break;
+        case FFP_MSG_PREPARED:
+            MPTRACE("FFP_MSG_PREPARED:\n");
+            post_event(env, weak_thiz, MEDIA_PREPARED, 0, 0);
+            break;
+        case FFP_MSG_COMPLETED:
+            MPTRACE("FFP_MSG_COMPLETED:\n");
+            post_event(env, weak_thiz, MEDIA_PLAYBACK_COMPLETE, 0, 0);
+            break;
+        case FFP_MSG_VIDEO_SIZE_CHANGED:
+            MPTRACE("FFP_MSG_VIDEO_SIZE_CHANGED: %d, %d\n", msg.arg1, msg.arg2);
+            post_event(env, weak_thiz, MEDIA_SET_VIDEO_SIZE, msg.arg1, msg.arg2);
+            break;
+        case FFP_MSG_SAR_CHANGED:
+            MPTRACE("FFP_MSG_SAR_CHANGED: %d, %d\n", msg.arg1, msg.arg2);
+            post_event(env, weak_thiz, MEDIA_SET_VIDEO_SAR, msg.arg1, msg.arg2);
+            break;
+        case FFP_MSG_VIDEO_RENDERING_START:
+            MPTRACE("FFP_MSG_VIDEO_RENDERING_START:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_VIDEO_RENDERING_START, 0);
+            break;
+        case FFP_MSG_AUDIO_RENDERING_START:
+            MPTRACE("FFP_MSG_AUDIO_RENDERING_START:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_AUDIO_RENDERING_START, 0);
+            break;
+        case FFP_MSG_VIDEO_ROTATION_CHANGED:
+            MPTRACE("FFP_MSG_VIDEO_ROTATION_CHANGED: %d\n", msg.arg1);
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_VIDEO_ROTATION_CHANGED, msg.arg1);
+            break;
+        case FFP_MSG_AUDIO_DECODED_START:
+            MPTRACE("FFP_MSG_AUDIO_DECODED_START:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_AUDIO_DECODED_START, 0);
+            break;
+        case FFP_MSG_VIDEO_DECODED_START:
+            MPTRACE("FFP_MSG_VIDEO_DECODED_START:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_VIDEO_DECODED_START, 0);
+            break;
+        case FFP_MSG_OPEN_INPUT:
+            MPTRACE("FFP_MSG_OPEN_INPUT:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_OPEN_INPUT, 0);
+            break;
+        case FFP_MSG_FIND_STREAM_INFO:
+            MPTRACE("FFP_MSG_FIND_STREAM_INFO:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_FIND_STREAM_INFO, 0);
+            break;
+        case FFP_MSG_COMPONENT_OPEN:
+            MPTRACE("FFP_MSG_COMPONENT_OPEN:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_COMPONENT_OPEN, 0);
+            break;
+        case FFP_MSG_BUFFERING_START:
+            MPTRACE("FFP_MSG_BUFFERING_START:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_BUFFERING_START, msg.arg1);
+            break;
+        case FFP_MSG_BUFFERING_END:
+            MPTRACE("FFP_MSG_BUFFERING_END:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_BUFFERING_END, msg.arg1);
+            break;
+        case FFP_MSG_BUFFERING_UPDATE:
+            // MPTRACE("FFP_MSG_BUFFERING_UPDATE: %d, %d", msg.arg1, msg.arg2);
+            post_event(env, weak_thiz, MEDIA_BUFFERING_UPDATE, msg.arg1, msg.arg2);
+            break;
+        case FFP_MSG_BUFFERING_BYTES_UPDATE:
+            break;
+        case FFP_MSG_BUFFERING_TIME_UPDATE:
+            break;
+        case FFP_MSG_SEEK_COMPLETE:
+            MPTRACE("FFP_MSG_SEEK_COMPLETE:\n");
+            post_event(env, weak_thiz, MEDIA_SEEK_COMPLETE, 0, 0);
+            break;
+        case FFP_MSG_ACCURATE_SEEK_COMPLETE:
+            MPTRACE("FFP_MSG_ACCURATE_SEEK_COMPLETE:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_MEDIA_ACCURATE_SEEK_COMPLETE, msg.arg1);
+            break;
+        case FFP_MSG_PLAYBACK_STATE_CHANGED:
+            break;
+        case FFP_MSG_TIMED_TEXT:
+            if (msg.obj) {
+                jstring text = (*env)->NewStringUTF(env, (char *)msg.obj);
+                post_event2(env, weak_thiz, MEDIA_TIMED_TEXT, 0, 0, text);
+                J4A_DeleteLocalRef__p(env, &text);
+            }
+            else {
+                post_event2(env, weak_thiz, MEDIA_TIMED_TEXT, 0, 0, NULL);
+            }
+            break;
+        case FFP_MSG_GET_IMG_STATE:
+            if (msg.obj) {
+                jstring file_name = (*env)->NewStringUTF(env, (char *)msg.obj);
+                post_event2(env, weak_thiz, MEDIA_GET_IMG_STATE, msg.arg1, msg.arg2, file_name);
+                J4A_DeleteLocalRef__p(env, &file_name);
+            }
+            else {
+                post_event2(env, weak_thiz, MEDIA_GET_IMG_STATE, msg.arg1, msg.arg2, NULL);
+            }
+            break;
+        case FFP_MSG_VIDEO_SEEK_RENDERING_START:
+            MPTRACE("FFP_MSG_VIDEO_SEEK_RENDERING_START:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_VIDEO_SEEK_RENDERING_START, msg.arg1);
+            break;
+        case FFP_MSG_AUDIO_SEEK_RENDERING_START:
+            MPTRACE("FFP_MSG_AUDIO_SEEK_RENDERING_START:\n");
+            post_event(env, weak_thiz, MEDIA_INFO, MEDIA_INFO_AUDIO_SEEK_RENDERING_START, msg.arg1);
+            break;
+        default:
+            ALOGE("unknown FFP_MSG_xxx(%d)\n", msg.what);
+            break;
+        }
+        msg_free_res(&msg);
+    }
+
+LABEL_RETURN:
+    ;
+}
+```
+
+```int retval = ijkmp_get_msg(mp, &msg, 1);``` 得到当前发送的 msg。[方法详解](ijkmp_get_msg.md)
+
+```FFP_MSG_FLUSH``` 等一系列 EVENT 的[声明详解](ff_ffmsg.md)
+
+对于每个 msg，都有或是 ```post_event``` 方法，或是 ```post_event2```，用来传 event。
+
+```
+inline static void post_event(JNIEnv *env, jobject weak_this, int what, int arg1, int arg2)
+{
+    // MPTRACE("post_event(%p, %p, %d, %d, %d)", (void*)env, (void*) weak_this, what, arg1, arg2);
+    J4AC_IjkMediaPlayer__postEventFromNative(env, weak_this, what, arg1, arg2, NULL);
+    // MPTRACE("post_event()=void");
+}
+
+inline static void post_event2(JNIEnv *env, jobject weak_this, int what, int arg1, int arg2, jobject obj)
+{
+    // MPTRACE("post_event2(%p, %p, %d, %d, %d, %p)", (void*)env, (void*) weak_this, what, arg1, arg2, (void*)obj);
+    J4AC_IjkMediaPlayer__postEventFromNative(env, weak_this, what, arg1, arg2, obj);
+    // MPTRACE("post_event2()=void");
+}
+```
+
+可看到，都会走一个统一的回调方法 ```J4AC_IjkMediaPlayer__postEventFromNative```，方法声明在 ijkmedia/ijkj4a/j4a/class/tv/danmaku/ijk/media/player/IjkMediaPlayer.h 中：
+
+```
+#define J4AC_IjkMediaPlayer__postEventFromNative J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer__postEventFromNative
+```
+
+实现在对应的 ijkmedia/ijkj4a/j4a/class/tv/danmaku/ijk/media/player/IjkMediaPlayer.c 中：
+
+```
+typedef struct J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer {
+    jclass id;
+
+    jfieldID field_mNativeMediaPlayer;
+    jfieldID field_mNativeMediaDataSource;
+    jfieldID field_mNativeAndroidIO;
+    jmethodID method_postEventFromNative;
+    jmethodID method_onSelectCodec;
+    jmethodID method_onNativeInvoke;
+} J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer;
+static J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer class_J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer;
+
+void J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer__postEventFromNative(JNIEnv *env, jobject weakThiz, jint what, jint arg1, jint arg2, jobject obj)
+{
+    (*env)->CallStaticVoidMethod(env, class_J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer.id, class_J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer.method_postEventFromNative, weakThiz, what, arg1, arg2, obj);
+}
+```
+
+其中，```method_postEventFromNative``` 的初始化：
+
+```
+int J4A_loadClass__J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer(JNIEnv *env)
+{
+    ...
+    
+    sign = "tv/danmaku/ijk/media/player/IjkMediaPlayer";
+    class_J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer.id = J4A_FindClass__asGlobalRef__catchAll(env, sign);
+    if (class_J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer.id == NULL)
+        goto fail;
+    
+    ...
+    
+    class_id = class_J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer.id;
+    name     = "postEventFromNative";
+    sign     = "(Ljava/lang/Object;IIILjava/lang/Object;)V";
+    class_J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer.method_postEventFromNative = J4A_GetStaticMethodID__catchAll(env, class_id, name, sign);
+    if (class_J4AC_tv_danmaku_ijk_media_player_IjkMediaPlayer.method_postEventFromNative == NULL)
+        goto fail;
+        
+    ...
+}
+```
+
+可知，是对应着 tv/danmaku/ijk/media/player/IjkMediaPlayer.Java 中的 postEventFromNative 方法。下面来分析一下 android/ijkplayer/ijkplayer-java/src/main/java/tv/danmaku/ijk/media/player/IjkMediaPlayer.java：
+
+```
+/*
+ * Called from native code when an interesting event happens. This method
+ * just uses the EventHandler system to post the event back to the main app
+ * thread. We use a weak reference to the original IjkMediaPlayer object so
+ * that the native code is safe from the object disappearing from underneath
+ * it. (This is the cookie passed to native_setup().)
+ */
+@CalledByNative
+private static void postEventFromNative(Object weakThiz, int what,
+        int arg1, int arg2, Object obj) {
+    if (weakThiz == null)
+        return;
+
+    @SuppressWarnings("rawtypes")
+    IjkMediaPlayer mp = (IjkMediaPlayer) ((WeakReference) weakThiz).get();
+    if (mp == null) {
+        return;
+    }
+
+    if (what == MEDIA_INFO && arg1 == MEDIA_INFO_STARTED_AS_NEXT) {
+        // this acquires the wakelock if needed, and sets the client side
+        // state
+        mp.start();
+    }
+    if (mp.mEventHandler != null) {
+        Message m = mp.mEventHandler.obtainMessage(what, arg1, arg2, obj);
+        mp.mEventHandler.sendMessage(m);
+    }
+}
+```
+
+这样就和 Java 的代码联系在一起了。然后再看 mEventHandler 声明：
+
+```
+private EventHandler mEventHandler;
+```
+
+初始化：
+
+```
+private void initPlayer(IjkLibLoader libLoader) {
+    loadLibrariesOnce(libLoader);
+    initNativeOnce();
+
+    Looper looper;
+    if ((looper = Looper.myLooper()) != null) {
+        mEventHandler = new EventHandler(this, looper);
+    } else if ((looper = Looper.getMainLooper()) != null) {
+        mEventHandler = new EventHandler(this, looper);
+    } else {
+        mEventHandler = null;
+    }
+
+    /*
+     * Native setup requires a weak reference to our object. It's easier to
+     * create it here than in C++.
+     */
+    native_setup(new WeakReference<IjkMediaPlayer>(this));
+}
+```
+
+EventHandler 是 IjkMediaPlayer 中的静态内部类，主要看 handleMessage 方法：
+
+```
+@Override
+public void handleMessage(Message msg) {
+    IjkMediaPlayer player = mWeakPlayer.get();
+    if (player == null || player.mNativeMediaPlayer == 0) {
+        DebugLog.w(TAG,
+                "IjkMediaPlayer went away with unhandled events");
+        return;
+    }
+
+    switch (msg.what) {
+    case MEDIA_PREPARED:
+        player.notifyOnPrepared();
+        return;
+
+    case MEDIA_PLAYBACK_COMPLETE:
+        player.stayAwake(false);
+        player.notifyOnCompletion();
+        return;
+
+    case MEDIA_BUFFERING_UPDATE:
+        long bufferPosition = msg.arg1;
+        if (bufferPosition < 0) {
+            bufferPosition = 0;
+        }
+
+        long percent = 0;
+        long duration = player.getDuration();
+        if (duration > 0) {
+            percent = bufferPosition * 100 / duration;
+        }
+        if (percent >= 100) {
+            percent = 100;
+        }
+
+        // DebugLog.efmt(TAG, "Buffer (%d%%) %d/%d",  percent, bufferPosition, duration);
+        player.notifyOnBufferingUpdate((int)percent);
+        return;
+
+    case MEDIA_SEEK_COMPLETE:
+        player.notifyOnSeekComplete();
+        return;
+
+    case MEDIA_SET_VIDEO_SIZE:
+        player.mVideoWidth = msg.arg1;
+        player.mVideoHeight = msg.arg2;
+        player.notifyOnVideoSizeChanged(player.mVideoWidth, player.mVideoHeight,
+                player.mVideoSarNum, player.mVideoSarDen);
+        return;
+
+    case MEDIA_ERROR:
+        DebugLog.e(TAG, "Error (" + msg.arg1 + "," + msg.arg2 + ")");
+        if (!player.notifyOnError(msg.arg1, msg.arg2)) {
+            player.notifyOnCompletion();
+        }
+        player.stayAwake(false);
+        return;
+
+    case MEDIA_INFO:
+        switch (msg.arg1) {
+            case MEDIA_INFO_VIDEO_RENDERING_START:
+                DebugLog.i(TAG, "Info: MEDIA_INFO_VIDEO_RENDERING_START\n");
+                break;
+        }
+        player.notifyOnInfo(msg.arg1, msg.arg2);
+        // No real default action so far.
+        return;
+    case MEDIA_TIMED_TEXT:
+        if (msg.obj == null) {
+            player.notifyOnTimedText(null);
+        } else {
+            IjkTimedText text = new IjkTimedText(new Rect(0, 0, 1, 1), (String)msg.obj);
+            player.notifyOnTimedText(text);
+        }
+        return;
+    case MEDIA_NOP: // interface test message - ignore
+        break;
+
+    case MEDIA_SET_VIDEO_SAR:
+        player.mVideoSarNum = msg.arg1;
+        player.mVideoSarDen = msg.arg2;
+        player.notifyOnVideoSizeChanged(player.mVideoWidth, player.mVideoHeight,
+                player.mVideoSarNum, player.mVideoSarDen);
+        break;
+
+    default:
+        DebugLog.e(TAG, "Unknown message type " + msg.what);
+    }
+}
+```
+
+每种回调可以慢慢分析，此不赘述。但是可以看出，这里的信息定义与之前的相比并不完整，MEDIA_PREPARED 等的[声明详解](media_msg.md)，此处可以扩展以获得更多的信息。
 
 
 ## native 初始化
