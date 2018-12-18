@@ -198,7 +198,13 @@ ijkmedia/ijksdl/android/ijksdl\_android\_jni.h
 ```
 通过 classsign__ 和 env__ 得到 jvm 中 class 的实例引用，并以 GlobalRef 的方式赋予 var__。对于 GlobalRef 和 LocalRef 的详细讲解，可参考 [Google 文档](https://developer.android.com/training/articles/perf-jni#local-and-global-references) 和 [java 文档](https://docs.oracle.com/javase/7/docs/technotes/guides/jni/spec/design.html#wp1242)
 
-### 第四句```ijkmp_global_init();```
+### 第四句 ```(*env)->RegisterNatives(env, g_clazz.clazz, g_methods, NELEM(g_methods) );```
+
+注册 g_methods 中的所有 Native 方法。[方法详解](https://docs.oracle.com/javase/7/docs/technotes/guides/jni/spec/functions.html#wp5833)
+
+之后的 Java 和 Native 的方法表便可从 g_methods 中查找。
+
+### 第五句```ijkmp_global_init();```
 
 ```ijkmp_global_init();``` 实现在：ijkmedia/ijkplayer/ijkplayer.c 中
 
@@ -320,7 +326,7 @@ void ffp_global_init()
 
 ```g_ffmpeg_global_inited = true;```，标记初始化完成。
 
-### 第五句 ```ijkmp_global_set_inject_callback(inject_callback);```
+### 第六句 ```ijkmp_global_set_inject_callback(inject_callback);```
 
 将之赋予类型为 FFPlayer 的 app_ctx->func_on_app_event 上，在对应 app_event 发生变化时便可及时获取回调。
 
@@ -418,7 +424,7 @@ fail:
 }
 ```
 
-### 第六句 ```FFmpegApi_global_init(env);```
+### 第七句 ```FFmpegApi_global_init(env);```
 
 该方法声明在 ijkmedia/ijkplayer/android/ffmpeg_api_jni.h 中：
 
@@ -444,7 +450,7 @@ int FFmpegApi_global_init(JNIEnv *env)
 
 将 FFmpegApi 的 JAVA 类加载到 JVM 当中。
 
-### 第七句 ```return JNI_VERSION_1_4;```
+### 第八句 ```return JNI_VERSION_1_4;```
 
 返回 JNI_VERSION_1_4。
 
@@ -492,9 +498,9 @@ struct IjkMediaPlayer {
 ```
 
 
-## message_loop
+## message\_loop 状态机
 
-于 ijkmedia/ijkplayer/android/ijkplayer_jni.c 中：
+于 ijkmedia/ijkplayer/android/ijkplayer\_jni.c 中：
 
 ```
 static int message_loop(void *arg);
@@ -1017,6 +1023,22 @@ static JNINativeMethod g_methods[] = {
 
 先看第三个方法，```IjkMediaPlayer_setDataSourceCallback```，因为在 Example 中，封装的 setDataSource，包含 url 和 path，最后指向的都是这个方法。
 
+前面的两个方法的基本流程都是一样的：
+
+```
+static void IjkMediaPlayer...setDataSource...(JNIEnv *env, jobject thiz, jstring path, ...)
+{
+    ...
+    IjkMediaPlayer *mp = jni_get_media_player(env, thiz);
+    ...
+    retval = ijkmp_set_data_source(mp, c_path);
+    ...
+    ijkmp_dec_ref_p(&mp);
+}
+```
+
+下面再详细分析第三个方法。
+
 ```IjkMediaPlayer_setDataSourceCallback``` 实现在 ijkmedia/ijkplayer/android/ijkplayer_jni.c :
 
 ```
@@ -1059,4 +1081,224 @@ LABEL_RETURN:
 ```IJK_CHECK_MPRET_GOTO(retval, env, LABEL_RETURN);``` 检查返回值，判断 set_data_source  是否成功。
 
 ```ijkmp_dec_ref_p(&mp);``` 对应释放对 mp 的引用。[方法详解](ijkmp_dec_ref_p.md)。
+
+
+### 准备同步
+
+通过 ijkmedia/ijkplayer/android/ijkplayer_jni.c 的 g_method 表，可以看到 prepareAsync 对应几个 native 方法：
+
+```
+static JNINativeMethod g_methods[] = {
+    ...
+    { "_prepareAsync", "()V", (void *) IjkMediaPlayer_prepareAsync },
+    ...
+}
+```
+
+实现：
+
+```
+static void
+IjkMediaPlayer_prepareAsync(JNIEnv *env, jobject thiz)
+{
+    MPTRACE("%s\n", __func__);
+    int retval = 0;
+    IjkMediaPlayer *mp = jni_get_media_player(env, thiz);
+    JNI_CHECK_GOTO(mp, env, "java/lang/IllegalStateException", "mpjni: prepareAsync: null mp", LABEL_RETURN);
+
+    retval = ijkmp_prepare_async(mp);
+    IJK_CHECK_MPRET_GOTO(retval, env, LABEL_RETURN);
+
+LABEL_RETURN:
+    ijkmp_dec_ref_p(&mp);
+}
+```
+
+方法 ```int jni_prepare_async(IjkMediaPlayer *mp)``` 声明和实现都在 ijkmedia/ijkplayer/ijkplayer.c 中：
+
+```
+int ijkmp_prepare_async(IjkMediaPlayer *mp)
+{
+    assert(mp);
+    MPTRACE("ijkmp_prepare_async()\n");
+    pthread_mutex_lock(&mp->mutex);
+    int retval = ijkmp_prepare_async_l(mp);
+    pthread_mutex_unlock(&mp->mutex);
+    MPTRACE("ijkmp_prepare_async()=%d\n", retval);
+    return retval;
+}
+
+static int ijkmp_prepare_async_l(IjkMediaPlayer *mp)
+{
+    assert(mp);
+
+    MPST_RET_IF_EQ(mp->mp_state, MP_STATE_IDLE);
+    // MPST_RET_IF_EQ(mp->mp_state, MP_STATE_INITIALIZED);
+    MPST_RET_IF_EQ(mp->mp_state, MP_STATE_ASYNC_PREPARING);
+    MPST_RET_IF_EQ(mp->mp_state, MP_STATE_PREPARED);
+    MPST_RET_IF_EQ(mp->mp_state, MP_STATE_STARTED);
+    MPST_RET_IF_EQ(mp->mp_state, MP_STATE_PAUSED);
+    MPST_RET_IF_EQ(mp->mp_state, MP_STATE_COMPLETED);
+    // MPST_RET_IF_EQ(mp->mp_state, MP_STATE_STOPPED);
+    MPST_RET_IF_EQ(mp->mp_state, MP_STATE_ERROR);
+    MPST_RET_IF_EQ(mp->mp_state, MP_STATE_END);
+
+    assert(mp->data_source);
+
+    ijkmp_change_state_l(mp, MP_STATE_ASYNC_PREPARING);
+
+    msg_queue_start(&mp->ffplayer->msg_queue);
+
+    // released in msg_loop
+    ijkmp_inc_ref(mp);
+    mp->msg_thread = SDL_CreateThreadEx(&mp->_msg_thread, ijkmp_msg_loop, mp, "ff_msg_loop");
+    // msg_thread is detached inside msg_loop
+    // TODO: 9 release weak_thiz if pthread_create() failed;
+
+    int retval = ffp_prepare_async_l(mp->ffplayer, mp->data_source);
+    if (retval < 0) {
+        ijkmp_change_state_l(mp, MP_STATE_ERROR);
+        return retval;
+    }
+
+    return 0;
+}
+```
+
+依然逐步分析：
+
+```
+MPST_RET_IF_EQ(mp->mp_state, MP_STATE_IDLE);
+// MPST_RET_IF_EQ(mp->mp_state, MP_STATE_INITIALIZED);
+...
+// MPST_RET_IF_EQ(mp->mp_state, MP_STATE_STOPPED);
+MPST_RET_IF_EQ(mp->mp_state, MP_STATE_ERROR);
+MPST_RET_IF_EQ(mp->mp_state, MP_STATE_END);
+```
+
+第一部分是用于状态机的检查，只有在 ```MP_STATE_INITIALIZED``` 和 ```MP_STATE_STOPPED``` 这两种状态时才能够执行 prepare\_async。
+
+```
+ijkmp_change_state_l(mp, MP_STATE_ASYNC_PREPARING);
+```
+
+这里是改变状态为 ```MP_STATE_ASYNC_PREPAREING```。[方法详解](ijkmp_change_state_l.md)
+
+```
+msg_queue_start(&mp->ffplayer->msg_queue);
+```
+
+在上面的[方法详解](ijkmp_change_state_l.md)中已经介绍过这个方法了。这个会激活 mp->ffplayer->msg_queue，并在 msg_queue 中加入一个类型为 ```FFP_MSG_FLUSH``` 的 Message。
+
+```
+mp->msg_thread = SDL_CreateThreadEx(&mp->_msg_thread, ijkmp_msg_loop, mp, "ff_msg_loop");
+```
+
+用于创建一个新的 Thread。[方法详解](SDL_CreateThreadEx.md)
+
+```
+int retval = ffp_prepare_async_l(mp->ffplayer, mp->data_source);
+```
+
+这里是真正实现 prepare\_async 逻辑的方法，在 ijkmedia/ijkplayer/ff_ffplay.c 中：
+
+```
+int ffp_prepare_async_l(FFPlayer *ffp, const char *file_name)
+{
+    assert(ffp);
+    assert(!ffp->is);
+    assert(file_name);
+
+    if (av_stristart(file_name, "rtmp", NULL) ||
+        av_stristart(file_name, "rtsp", NULL)) {
+        // There is total different meaning for 'timeout' option in rtmp
+        av_log(ffp, AV_LOG_WARNING, "remove 'timeout' option for rtmp.\n");
+        av_dict_set(&ffp->format_opts, "timeout", NULL, 0);
+    }
+
+    /* there is a length limit in avformat */
+    if (strlen(file_name) + 1 > 1024) {
+        av_log(ffp, AV_LOG_ERROR, "%s too long url\n", __func__);
+        if (avio_find_protocol_name("ijklongurl:")) {
+            av_dict_set(&ffp->format_opts, "ijklongurl-url", file_name, 0);
+            file_name = "ijklongurl:";
+        }
+    }
+
+    av_log(NULL, AV_LOG_INFO, "===== versions =====\n");
+    ffp_show_version_str(ffp, "ijkplayer",      ijk_version_info());
+    ffp_show_version_str(ffp, "FFmpeg",         av_version_info());
+    ffp_show_version_int(ffp, "libavutil",      avutil_version());
+    ffp_show_version_int(ffp, "libavcodec",     avcodec_version());
+    ffp_show_version_int(ffp, "libavformat",    avformat_version());
+    ffp_show_version_int(ffp, "libswscale",     swscale_version());
+    ffp_show_version_int(ffp, "libswresample",  swresample_version());
+    av_log(NULL, AV_LOG_INFO, "===== options =====\n");
+    ffp_show_dict(ffp, "player-opts", ffp->player_opts);
+    ffp_show_dict(ffp, "format-opts", ffp->format_opts);
+    ffp_show_dict(ffp, "codec-opts ", ffp->codec_opts);
+    ffp_show_dict(ffp, "sws-opts   ", ffp->sws_dict);
+    ffp_show_dict(ffp, "swr-opts   ", ffp->swr_opts);
+    av_log(NULL, AV_LOG_INFO, "===================\n");
+
+    av_opt_set_dict(ffp, &ffp->player_opts);
+    if (!ffp->aout) {
+        ffp->aout = ffpipeline_open_audio_output(ffp->pipeline, ffp);
+        if (!ffp->aout)
+            return -1;
+    }
+
+#if CONFIG_AVFILTER
+    if (ffp->vfilter0) {
+        GROW_ARRAY(ffp->vfilters_list, ffp->nb_vfilters);
+        ffp->vfilters_list[ffp->nb_vfilters - 1] = ffp->vfilter0;
+    }
+#endif
+
+    VideoState *is = stream_open(ffp, file_name, NULL);
+    if (!is) {
+        av_log(NULL, AV_LOG_WARNING, "ffp_prepare_async_l: stream_open failed OOM");
+        return EIJK_OUT_OF_MEMORY;
+    }
+
+    ffp->is = is;
+    ffp->input_filename = av_strdup(file_name);
+    return 0;
+}
+```
+
+逐步分析：
+
+```
+if (av_stristart(file_name, "rtmp", NULL) ||
+        av_stristart(file_name, "rtsp", NULL)) {
+    ...
+}
+```
+
+av_stristart 的声明在 android/contrib/ffmpeg-arm64/libavutil/avstring.h 中：
+
+```
+/**
+ * Return non-zero if pfx is a prefix of str independent of case. If
+ * it is, *ptr is set to the address of the first character in str
+ * after the prefix.
+ *
+ * @param str input string
+ * @param pfx prefix to test
+ * @param ptr updated if the prefix is matched inside str
+ * @return non-zero if the prefix matches, zero otherwise
+ */
+int av_stristart(const char *str, const char *pfx, const char **ptr);
+```
+
+判断一个字符串的前缀是否是给定的字符串。在此处就是判断是 rtmp 或 rtsp。
+
+```
+// There is total different meaning for 'timeout' option in rtmp
+av_log(ffp, AV_LOG_WARNING, "remove 'timeout' option for rtmp.\n");
+av_dict_set(&ffp->format_opts, "timeout", NULL, 0);
+```
+
+通过注释可知，timeout 的选项对 rtmp 来说意义各别的不一样，所以就设置 timeout 项为 NULL。[方法详解](av_dict_set.md)
 
