@@ -1302,3 +1302,401 @@ av_dict_set(&ffp->format_opts, "timeout", NULL, 0);
 
 通过注释可知，timeout 的选项对 rtmp 来说意义各别的不一样，所以就设置 timeout 项为 NULL。[方法详解](av_dict_set.md)
 
+```
+/* there is a length limit in avformat */
+if (strlen(file_name) + 1 > 1024) {
+    av_log(ffp, AV_LOG_ERROR, "%s too long url\n", __func__);
+    if (avio_find_protocol_name("ijklongurl:")) {
+        av_dict_set(&ffp->format_opts, "ijklongurl-url", file_name, 0);
+        file_name = "ijklongurl:";
+    }
+}
+```
+
+对于 avformat 有长度限制为 1024，利用一个叫做 "ijklongurl" 的协议来对过长的文件名进行适配。
+
+```
+if (avio_find_protocol_name("ijklongurl:")) {
+    ...
+}
+```
+
+检查是否支持了 ijklongurl 协议。[方法详解](avio_find_protocol_name.md)
+
+```
+av_dict_set(&ffp->format_opts, "ijklongurl-url", file_name, 0);
+```
+
+设置 ```"ijklongurl-url"``` 选项为 ```file_name```。
+
+```
+file_name = "ijklongurl:";
+```
+
+再将 ```file_name``` 设为 ```"ijklongurl:"```。可以推测是将文件名替换为 ```"ijklongurl:"```，之后在播放时，从 ```ffp->format_opts``` 中找到真实的文件名，去请求播放。
+
+```
+av_log(NULL, AV_LOG_INFO, "===== versions =====\n");
+ffp_show_version_str(ffp, "ijkplayer",      ijk_version_info());
+ffp_show_version_str(ffp, "FFmpeg",         av_version_info());
+ffp_show_version_int(ffp, "libavutil",      avutil_version());
+ffp_show_version_int(ffp, "libavcodec",     avcodec_version());
+ffp_show_version_int(ffp, "libavformat",    avformat_version());
+ffp_show_version_int(ffp, "libswscale",     swscale_version());
+ffp_show_version_int(ffp, "libswresample",  swresample_version());
+```
+
+打印版本信息。
+
+```
+av_log(NULL, AV_LOG_INFO, "===== options =====\n");
+ffp_show_dict(ffp, "player-opts", ffp->player_opts);
+ffp_show_dict(ffp, "format-opts", ffp->format_opts);
+ffp_show_dict(ffp, "codec-opts ", ffp->codec_opts);
+ffp_show_dict(ffp, "sws-opts   ", ffp->sws_dict);
+ffp_show_dict(ffp, "swr-opts   ", ffp->swr_opts);
+av_log(NULL, AV_LOG_INFO, "===================\n");
+```
+
+打印选项信息。
+
+```
+av_opt_set_dict(ffp, &ffp->player_opts);
+```
+
+将 ```ffp->player_opts``` 设置到选项当中。[方法详解](av_opt_set_dict.md)
+
+```
+if (!ffp->aout) {
+    ffp->aout = ffpipeline_open_audio_output(ffp->pipeline, ffp);
+    if (!ffp->aout)
+        return -1;
+}
+```
+
+对 ```ffp->aout``` 判空，若为空，则为其打开一个新的 Audio 输出管道。若创建失败，则返回 -1。创建 Audio 管道的[方法详解](ffpipeline_open_audio_output.md)。
+
+```
+#if CONFIG_AVFILTER
+    if (ffp->vfilter0) {
+        GROW_ARRAY(ffp->vfilters_list, ffp->nb_vfilters);
+        ffp->vfilters_list[ffp->nb_vfilters - 1] = ffp->vfilter0;
+    }
+#endif
+```
+
+如果配制了 ```CONFIG_AVFILTER```，则先判断 ```ffp->vfilter0``` 是否为空，若不为空，先为 ```ffp->vfilters_list``` 扩展长度为 ```ffp->nb_vfilters``` 的空间，之后再将 ```ffp->vfilter0``` 放入 ```ffp->nb_vfilters``` 的末尾。```GROW_ARRAY``` 的声明在 extra/ffmpeg/cmdutils.h 中：
+
+```
+/**
+ * Realloc array to hold new_size elements of elem_size.
+ * Calls exit() on failure.
+ *
+ * @param array array to reallocate
+ * @param elem_size size in bytes of each element
+ * @param size new element count will be written here
+ * @param new_size number of elements to place in reallocated array
+ * @return reallocated array
+ */
+void *grow_array(void *array, int elem_size, int *size, int new_size);
+ 
+#define GROW_ARRAY(array, nb_elems)\
+    array = grow_array(array, sizeof(*array), &nb_elems, nb_elems + 1)
+```
+
+用于扩展 array 的长度。
+
+```
+VideoState *is = stream_open(ffp, file_name, NULL);
+```
+
+打开数据流，得到状态。[方法详解](stream_open.md)
+
+```
+if (!is) {
+    av_log(NULL, AV_LOG_WARNING, "ffp_prepare_async_l: stream_open failed OOM");
+    return EIJK_OUT_OF_MEMORY;
+}
+```
+
+对 ```is``` 进行判空报错。
+
+```
+ffp->is = is;
+ffp->input_filename = av_strdup(file_name);
+return 0;
+```
+
+将返回的 ```is``` 状态设给 ```ffp```，接着给 ```ffp->input_filename``` 设置文件名，最后返回 0。
+
+至此，prepareAsync 就分析完毕。
+
+
+### 开始播放
+
+通过 ijkmedia/ijkplayer/android/ijkplayer_jni.c 的 g_method 表，可以看到 _start 对应 native 方法：
+
+```
+static JNINativeMethod g_methods[] = {
+    ...
+    { "_start", "()V", (void *) IjkMediaPlayer_start },
+    ...
+}
+
+static void
+IjkMediaPlayer_start(JNIEnv *env, jobject thiz)
+{
+    MPTRACE("%s\n", __func__);
+    IjkMediaPlayer *mp = jni_get_media_player(env, thiz);
+    JNI_CHECK_GOTO(mp, env, "java/lang/IllegalStateException", "mpjni: start: null mp", LABEL_RETURN);
+
+    ijkmp_start(mp);
+
+LABEL_RETURN:
+    ijkmp_dec_ref_p(&mp);
+}
+```
+
+逐步分析：
+
+```
+IjkMediaPlayer *mp = jni_get_media_player(env, thiz);
+```
+
+得到 IjkMediaPlayer 的引用。
+
+```
+ijkmp_start(mp);
+```
+
+开始播放，方法声明在 ijkmedia/ijkplayer/ijkplayer.h 中：
+
+```
+int ijkmp_start(IjkMediaPlayer *mp);
+```
+
+方法实现在 ijkmedia/ijkplayer/ijkplayer.c 中：
+
+```
+static int ikjmp_chkst_start_l(int mp_state)
+{
+    MPST_RET_IF_EQ(mp_state, MP_STATE_IDLE);
+    MPST_RET_IF_EQ(mp_state, MP_STATE_INITIALIZED);
+    MPST_RET_IF_EQ(mp_state, MP_STATE_ASYNC_PREPARING);
+    // MPST_RET_IF_EQ(mp_state, MP_STATE_PREPARED);
+    // MPST_RET_IF_EQ(mp_state, MP_STATE_STARTED);
+    // MPST_RET_IF_EQ(mp_state, MP_STATE_PAUSED);
+    // MPST_RET_IF_EQ(mp_state, MP_STATE_COMPLETED);
+    MPST_RET_IF_EQ(mp_state, MP_STATE_STOPPED);
+    MPST_RET_IF_EQ(mp_state, MP_STATE_ERROR);
+    MPST_RET_IF_EQ(mp_state, MP_STATE_END);
+
+    return 0;
+}
+
+static int ijkmp_start_l(IjkMediaPlayer *mp)
+{
+    assert(mp);
+
+    MP_RET_IF_FAILED(ikjmp_chkst_start_l(mp->mp_state));
+
+    ffp_remove_msg(mp->ffplayer, FFP_REQ_START);
+    ffp_remove_msg(mp->ffplayer, FFP_REQ_PAUSE);
+    ffp_notify_msg1(mp->ffplayer, FFP_REQ_START);
+
+    return 0;
+}
+
+int ijkmp_start(IjkMediaPlayer *mp)
+{
+    assert(mp);
+    MPTRACE("ijkmp_start()\n");
+    pthread_mutex_lock(&mp->mutex);
+    int retval = ijkmp_start_l(mp);
+    pthread_mutex_unlock(&mp->mutex);
+    MPTRACE("ijkmp_start()=%d\n", retval);
+    return retval;
+}
+```
+
+先看最开始的状态检测：
+
+```
+MPST_RET_IF_EQ(mp_state, MP_STATE_IDLE);
+MPST_RET_IF_EQ(mp_state, MP_STATE_INITIALIZED);
+MPST_RET_IF_EQ(mp_state, MP_STATE_ASYNC_PREPARING);
+// MPST_RET_IF_EQ(mp_state, MP_STATE_PREPARED);
+// MPST_RET_IF_EQ(mp_state, MP_STATE_STARTED);
+// MPST_RET_IF_EQ(mp_state, MP_STATE_PAUSED);
+// MPST_RET_IF_EQ(mp_state, MP_STATE_COMPLETED);
+MPST_RET_IF_EQ(mp_state, MP_STATE_STOPPED);
+MPST_RET_IF_EQ(mp_state, MP_STATE_ERROR);
+MPST_RET_IF_EQ(mp_state, MP_STATE_END);
+```
+
+只有在视频处于 ```MP_STATE_PREPARED```，```MP_STATE_STARTED```，```MP_STATE_PAUSED``` 和 ```MP_STATE_COMPLETED``` 的状态下才可执行 start 方法。
+
+```
+ffp_remove_msg(mp->ffplayer, FFP_REQ_START);
+ffp_remove_msg(mp->ffplayer, FFP_REQ_PAUSE);
+ffp_notify_msg1(mp->ffplayer, FFP_REQ_START);
+```
+
+移除之前的状态 ```FFP_REQ_START``` 和 ```FFP_REQ_PAUSE```，并发送状态消息 ```FFP_REQ_START```。
+
+接着在收到消息之后，之前讲过状态机方法，声明在 ijkmedia/ijkplayer/ijkplayer.h 中：
+
+```
+/* return < 0 if aborted, 0 if no packet and > 0 if packet.  */
+/* need to call msg_free_res for freeing the resouce obtained in msg */
+int ijkmp_get_msg(IjkMediaPlayer *mp, AVMessage *msg, int block);
+```
+
+实现在 ijkmedia/ijkplayer/ijkplayer.c 中，现只看 ```case FFP_REQ_START:``` 部分：
+
+```
+/* need to call msg_free_res for freeing the resouce obtained in msg */
+int ijkmp_get_msg(IjkMediaPlayer *mp, AVMessage *msg, int block)
+{
+    ...
+    
+    while (1) {
+    
+        ...
+        
+        case FFP_REQ_START:
+            MPTRACE("ijkmp_get_msg: FFP_REQ_START\n");
+            continue_wait_next_msg = 1;
+            pthread_mutex_lock(&mp->mutex);
+            if (0 == ikjmp_chkst_start_l(mp->mp_state)) {
+                // FIXME: 8 check seekable
+                if (mp->restart) {
+                    if (mp->restart_from_beginning) {
+                        av_log(mp->ffplayer, AV_LOG_DEBUG, "ijkmp_get_msg: FFP_REQ_START: restart from beginning\n");
+                        retval = ffp_start_from_l(mp->ffplayer, 0);
+                        if (retval == 0)
+                            ijkmp_change_state_l(mp, MP_STATE_STARTED);
+                    } else {
+                        av_log(mp->ffplayer, AV_LOG_DEBUG, "ijkmp_get_msg: FFP_REQ_START: restart from seek pos\n");
+                        retval = ffp_start_l(mp->ffplayer);
+                        if (retval == 0)
+                            ijkmp_change_state_l(mp, MP_STATE_STARTED);
+                    }
+                    mp->restart = 0;
+                    mp->restart_from_beginning = 0;
+                } else {
+                    av_log(mp->ffplayer, AV_LOG_DEBUG, "ijkmp_get_msg: FFP_REQ_START: start on fly\n");
+                    retval = ffp_start_l(mp->ffplayer);
+                    if (retval == 0)
+                        ijkmp_change_state_l(mp, MP_STATE_STARTED);
+                }
+            }
+            pthread_mutex_unlock(&mp->mutex);
+            break;
+
+        case FFP_REQ_PAUSE:
+            MPTRACE("ijkmp_get_msg: FFP_REQ_PAUSE\n");
+            continue_wait_next_msg = 1;
+            pthread_mutex_lock(&mp->mutex);
+            if (0 == ikjmp_chkst_pause_l(mp->mp_state)) {
+                int pause_ret = ffp_pause_l(mp->ffplayer);
+                if (pause_ret == 0)
+                    ijkmp_change_state_l(mp, MP_STATE_PAUSED);
+            }
+            pthread_mutex_unlock(&mp->mutex);
+            break;
+            
+        ...
+        
+        if (continue_wait_next_msg) {
+            msg_free_res(msg);
+            continue;
+        }
+
+        return retval;
+    }
+    
+    return -1;
+}
+```
+
+```continue_wait_next_msg = 1```，标记状态机继续运行为 true。
+
+```pthread_mutex_lock(&mp->mutex);```，加锁。
+
+```if (0 == ikjmp_chkst_start_l(mp->mp_state)) {```，当前播放器的状态检查，同上。
+
+```if (mp->restart) {```，判断是否是重播。
+
+若是重播：
+
+```if (mp->restart_from_beginning) {```，判断是否从头重播。
+
+若是从头重播：
+
+```retval = ffp_start_from_l(mp->ffplayer, 0);``` 从头开始播放。[方法详解](ffp_start_from_l.md)
+
+```
+if (retval == 0)
+    ijkmp_change_state_l(mp, MP_STATE_STARTED);
+```
+
+若从头开始播放的返回码是无错的，那么改变播放器状态为已经开始。
+
+```
+else {
+    retval = ffp_start_l(mp->ffplayer);
+    if (retval == 0)
+        ijkmp_change_state_l(mp, MP_STATE_STARTED);
+}
+```
+
+这里若不是从头重播，则直接调用开始播放的函数，并将播放器状态置为已经开始。
+
+```
+mp->restart = 0;
+mp->restart_from_beginning = 0;
+```
+
+设置 ```restart``` 和 ```restart_from_beginning``` 状态为 ```false```。
+
+```
+else {
+    av_log(mp->ffplayer, AV_LOG_DEBUG, "ijkmp_get_msg: FFP_REQ_START: start on fly\n");
+    retval = ffp_start_l(mp->ffplayer);
+    if (retval == 0)
+        ijkmp_change_state_l(mp, MP_STATE_STARTED);
+}
+```
+
+如果不是重播，那么就直接播放，并将播放器的状态置为已经开始。
+
+```pthread_mutex_unlock(&mp->mutex);``` 解锁。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
